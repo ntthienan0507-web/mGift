@@ -159,6 +159,9 @@ export default function PaymentResult() {
                     {currentOrder.shipping.phone}
                   </p>
                   <p className="text-sm text-muted-foreground">
+                    {currentOrder.shipping.email}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
                     {currentOrder.shipping.address}
                   </p>
                 </div>

@@ -505,6 +505,9 @@ export default function Payment() {
                 {currentOrder.shipping.name} - {currentOrder.shipping.phone}
               </p>
               <p className="text-muted-foreground">
+                {currentOrder.shipping.email}
+              </p>
+              <p className="text-muted-foreground">
                 {currentOrder.shipping.address}
               </p>
             </div>

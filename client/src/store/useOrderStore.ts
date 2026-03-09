@@ -18,6 +18,7 @@ export type OrderStatus =
 export interface ShippingInfo {
   name: string;
   phone: string;
+  email: string;
   address: string;
   note: string;
   giftMessage: string;

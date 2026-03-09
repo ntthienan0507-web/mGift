@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Gift, Package, Trash2, ShoppingBag, MapPin, User, Phone } from "lucide-react";
+import { Gift, Package, Trash2, ShoppingBag, MapPin, User, Phone, Mail } from "lucide-react";
 import { useGiftBoxStore } from "@/store/useGiftBoxStore";
 import { useOrderStore } from "@/store/useOrderStore";
 import { useNavigate } from "react-router-dom";
@@ -14,7 +14,7 @@ const SHIPPING_STORAGE_KEY = "mgift_shipping_info";
 function getSavedShipping() {
   try {
     const saved = localStorage.getItem(SHIPPING_STORAGE_KEY);
-    if (saved) return JSON.parse(saved) as { name: string; phone: string; address: string };
+    if (saved) return JSON.parse(saved) as { name: string; phone: string; email: string; address: string };
   } catch { /* ignore */ }
   return null;
 }
@@ -29,6 +29,7 @@ export default function Checkout() {
   const saved = getSavedShipping();
   const [name, setName] = useState(saved?.name ?? "");
   const [phone, setPhone] = useState(saved?.phone ?? "");
+  const [email, setEmail] = useState(saved?.email ?? "");
   const [address, setAddress] = useState(saved?.address ?? "");
   const [note, setNote] = useState("");
   const [giftMessage, setGiftMessage] = useState("");
@@ -39,13 +40,13 @@ export default function Checkout() {
     if (saveInfo && name && phone && address) {
       localStorage.setItem(
         SHIPPING_STORAGE_KEY,
-        JSON.stringify({ name, phone, address })
+        JSON.stringify({ name, phone, email, address })
       );
     }
     if (!saveInfo) {
       localStorage.removeItem(SHIPPING_STORAGE_KEY);
     }
-  }, [saveInfo, name, phone, address]);
+  }, [saveInfo, name, phone, email, address]);
 
   if (items.length === 0) {
     return (
@@ -62,13 +63,14 @@ export default function Checkout() {
     );
   }
 
-  const canProceed = name.trim() && phone.trim() && address.trim();
+  const canProceed = name.trim() && phone.trim() && email.trim() && address.trim();
 
   const handleProceedToPayment = () => {
     if (!canProceed) return;
     createOrder(items, {
       name: name.trim(),
       phone: phone.trim(),
+      email: email.trim(),
       address: address.trim(),
       note: note.trim(),
       giftMessage: giftMessage.trim(),
@@ -133,6 +135,20 @@ export default function Checkout() {
                     onChange={(e) => setPhone(e.target.value)}
                   />
                 </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium flex items-center gap-1">
+                  <Mail className="h-3 w-3" /> Email *
+                </label>
+                <Input
+                  type="email"
+                  placeholder="email@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Dùng để nhận xác nhận đơn hàng và cập nhật trạng thái giao hàng
+                </p>
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium flex items-center gap-1">
