@@ -30,12 +30,23 @@ export default function PaymentResult() {
   const navigate = useNavigate();
   const [copied, setCopied] = useState(false);
 
-  // Xóa Gift Box khi thanh toán thành công
+  // Xóa Gift Box + lưu mã đơn hàng khi thanh toán thành công
   useEffect(() => {
     if (currentOrder?.status === "paid") {
       clearBox();
+      // Lưu mã đơn hàng vào localStorage
+      try {
+        const key = "mgift_order_history";
+        const raw = localStorage.getItem(key);
+        const history: { id: string; date: string }[] = raw ? JSON.parse(raw) : [];
+        if (!history.some((o) => o.id === currentOrder.id)) {
+          history.unshift({ id: currentOrder.id, date: currentOrder.createdAt });
+          // Giữ tối đa 20 đơn gần nhất
+          localStorage.setItem(key, JSON.stringify(history.slice(0, 20)));
+        }
+      } catch { /* ignore */ }
     }
-  }, [currentOrder?.status, clearBox]);
+  }, [currentOrder?.status, currentOrder?.id, currentOrder?.createdAt, clearBox]);
 
   if (!currentOrder) {
     return (
