@@ -7,7 +7,17 @@ import { Gift, Package, Trash2, ShoppingBag, MapPin, User, Phone } from "lucide-
 import { useGiftBoxStore } from "@/store/useGiftBoxStore";
 import { useOrderStore } from "@/store/useOrderStore";
 import { useNavigate } from "react-router-dom";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+
+const SHIPPING_STORAGE_KEY = "mgift_shipping_info";
+
+function getSavedShipping() {
+  try {
+    const saved = localStorage.getItem(SHIPPING_STORAGE_KEY);
+    if (saved) return JSON.parse(saved) as { name: string; phone: string; address: string };
+  } catch { /* ignore */ }
+  return null;
+}
 
 export default function Checkout() {
   const { items, removeItem, getTotal, getSupplierGroups, clearBox } =
@@ -16,11 +26,26 @@ export default function Checkout() {
   const navigate = useNavigate();
   const groups = getSupplierGroups();
 
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [address, setAddress] = useState("");
+  const saved = getSavedShipping();
+  const [name, setName] = useState(saved?.name ?? "");
+  const [phone, setPhone] = useState(saved?.phone ?? "");
+  const [address, setAddress] = useState(saved?.address ?? "");
   const [note, setNote] = useState("");
   const [giftMessage, setGiftMessage] = useState("");
+  const [saveInfo, setSaveInfo] = useState(!!saved);
+
+  // Lưu thông tin giao hàng khi user tick "Lưu"
+  useEffect(() => {
+    if (saveInfo && name && phone && address) {
+      localStorage.setItem(
+        SHIPPING_STORAGE_KEY,
+        JSON.stringify({ name, phone, address })
+      );
+    }
+    if (!saveInfo) {
+      localStorage.removeItem(SHIPPING_STORAGE_KEY);
+    }
+  }, [saveInfo, name, phone, address]);
 
   if (items.length === 0) {
     return (
@@ -139,6 +164,19 @@ export default function Checkout() {
                   onChange={(e) => setGiftMessage(e.target.value)}
                 />
               </div>
+
+              {/* Lưu thông tin */}
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={saveInfo}
+                  onChange={(e) => setSaveInfo(e.target.checked)}
+                  className="h-4 w-4 rounded border-input accent-primary"
+                />
+                <span className="text-sm text-muted-foreground">
+                  Lưu thông tin giao hàng cho lần sau
+                </span>
+              </label>
             </CardContent>
           </Card>
 
