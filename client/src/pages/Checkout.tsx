@@ -3,17 +3,24 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Gift, Package, Trash2, ShoppingBag } from "lucide-react";
+import { Gift, Package, Trash2, ShoppingBag, MapPin, User, Phone } from "lucide-react";
 import { useGiftBoxStore } from "@/store/useGiftBoxStore";
+import { useOrderStore } from "@/store/useOrderStore";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 
 export default function Checkout() {
   const { items, removeItem, getTotal, getSupplierGroups, clearBox } =
     useGiftBoxStore();
+  const { createOrder } = useOrderStore();
   const navigate = useNavigate();
   const groups = getSupplierGroups();
+
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [address, setAddress] = useState("");
   const [note, setNote] = useState("");
+  const [giftMessage, setGiftMessage] = useState("");
 
   if (items.length === 0) {
     return (
@@ -30,16 +37,112 @@ export default function Checkout() {
     );
   }
 
+  const canProceed = name.trim() && phone.trim() && address.trim();
+
+  const handleProceedToPayment = () => {
+    if (!canProceed) return;
+    createOrder(items, {
+      name: name.trim(),
+      phone: phone.trim(),
+      address: address.trim(),
+      note: note.trim(),
+      giftMessage: giftMessage.trim(),
+    });
+    navigate("/payment");
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
         <Gift className="h-6 w-6 text-primary" />
-        <h1 className="text-2xl font-bold">Custom Gift Box</h1>
+        <h1 className="text-2xl font-bold">Đặt hàng</h1>
+      </div>
+
+      {/* Stepper */}
+      <div className="flex items-center gap-2 text-sm">
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
+          1
+        </span>
+        <span className="font-medium">Xác nhận đơn</span>
+        <div className="h-px flex-1 bg-border" />
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-xs font-bold text-muted-foreground">
+          2
+        </span>
+        <span className="text-muted-foreground">Thanh toán</span>
+        <div className="h-px flex-1 bg-border" />
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-xs font-bold text-muted-foreground">
+          3
+        </span>
+        <span className="text-muted-foreground">Hoàn tất</span>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* Items grouped by supplier */}
         <div className="space-y-4 lg:col-span-2">
+          {/* Thông tin người nhận */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <MapPin className="h-4 w-4 text-primary" />
+                Thông tin giao hàng
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium flex items-center gap-1">
+                    <User className="h-3 w-3" /> Họ tên người nhận *
+                  </label>
+                  <Input
+                    placeholder="Nguyễn Văn A"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium flex items-center gap-1">
+                    <Phone className="h-3 w-3" /> Số điện thoại *
+                  </label>
+                  <Input
+                    placeholder="0901 234 567"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium flex items-center gap-1">
+                  <MapPin className="h-3 w-3" /> Địa chỉ giao hàng *
+                </label>
+                <Input
+                  placeholder="Số nhà, đường, phường/xã, quận/huyện, tỉnh/TP"
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Ghi chú giao hàng
+                </label>
+                <Input
+                  placeholder="VD: Giao giờ hành chính, gọi trước khi giao..."
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Lời nhắn tặng quà
+                </label>
+                <Input
+                  placeholder="Gửi lời yêu thương đến người nhận..."
+                  value={giftMessage}
+                  onChange={(e) => setGiftMessage(e.target.value)}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Sản phẩm theo NCC */}
           {Object.entries(groups).map(([supplier, supplierItems]) => (
             <Card key={supplier}>
               <CardHeader className="pb-3">
@@ -65,7 +168,7 @@ export default function Checkout() {
                     <div className="flex-1">
                       <p className="font-medium">{item.name}</p>
                       <p className="text-sm font-bold text-primary">
-                        {item.price.toLocaleString("vi-VN")}d
+                        {item.price.toLocaleString("vi-VN")}đ
                       </p>
                     </div>
                     <Button
@@ -82,8 +185,8 @@ export default function Checkout() {
           ))}
         </div>
 
-        {/* Order Summary */}
-        <Card className="h-fit">
+        {/* Tổng kết đơn hàng */}
+        <Card className="h-fit sticky top-20">
           <CardHeader>
             <CardTitle>Tổng kết đơn hàng</CardTitle>
           </CardHeader>
@@ -93,7 +196,7 @@ export default function Checkout() {
                 <span className="text-muted-foreground">
                   Số lượng món ({items.length})
                 </span>
-                <span>{getTotal().toLocaleString("vi-VN")}d</span>
+                <span>{getTotal().toLocaleString("vi-VN")}đ</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Phí đóng gói</span>
@@ -101,7 +204,7 @@ export default function Checkout() {
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Phí giao hàng</span>
-                <span>30,000d</span>
+                <span>30,000đ</span>
               </div>
             </div>
 
@@ -110,22 +213,25 @@ export default function Checkout() {
             <div className="flex justify-between text-lg font-bold">
               <span>Tổng cộng</span>
               <span className="text-primary">
-                {(getTotal() + 30000).toLocaleString("vi-VN")}d
+                {(getTotal() + 30000).toLocaleString("vi-VN")}đ
               </span>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Lời nhắn tặng quà</label>
-              <Input
-                placeholder="Gửi lời yêu thương..."
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-              />
-            </div>
-
-            <Button className="w-full" size="lg">
-              Đặt hàng
+            <Button
+              className="w-full"
+              size="lg"
+              disabled={!canProceed}
+              onClick={handleProceedToPayment}
+            >
+              Tiến hành thanh toán
             </Button>
+
+            {!canProceed && (
+              <p className="text-xs text-center text-muted-foreground">
+                Vui lòng điền đầy đủ thông tin giao hàng
+              </p>
+            )}
+
             <Button
               variant="ghost"
               className="w-full text-muted-foreground"
