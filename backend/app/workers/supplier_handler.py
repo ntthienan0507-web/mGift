@@ -57,6 +57,10 @@ async def check_timeouts() -> None:
                 )
                 expired_items = result.scalars().all()
 
+                from app.models.user import User
+                from app.models.order import Order
+                from app.services.push import push_order_update, push_to_admin
+
                 for item in expired_items:
                     item.status = OrderItemStatus.TIMEOUT
                     item.reject_reason = "Nhà cung cấp không phản hồi trong thời gian quy định"
@@ -64,6 +68,18 @@ async def check_timeouts() -> None:
 
                 if expired_items:
                     await db.commit()
+
+                    # Push timeout notification to admins
+                    admin_result = await db.execute(
+                        select(User).where(User.is_admin.is_(True), User.fcm_token.isnot(None))
+                    )
+                    admin_tokens = [u.fcm_token for u in admin_result.scalars().all() if u.fcm_token]
+                    await push_to_admin(
+                        fcm_tokens=admin_tokens,
+                        title="NCC quá hạn xác nhận",
+                        body=f"{len(expired_items)} sản phẩm bị timeout",
+                        url="/admin/orders",
+                    )
 
                     # Group by order and fire events
                     order_ids = set(str(item.order_id) for item in expired_items)
@@ -138,7 +154,17 @@ async def handle_items_rejected(event: dict) -> None:
             suggestions=suggestions,
         )
 
-    logger.info(f"ITEMS_REJECTED {order_id}: notified customer with {len(suggestions)} suggestions")
+        # Firebase push to customer
+        from app.services.push import push_order_update
+        item_names = ", ".join(r["product_name"] for r in rejected_items_info[:2])
+        await push_order_update(
+            fcm_token=user.fcm_token,
+            order_id=order_id,
+            status="Cần thay thế",
+            message=f"Sản phẩm {item_names} không khả dụng. Hãy chọn sản phẩm thay thế.",
+        )
+
+    logger.info(f"ITEMS_REJECTED {order_id}: notified customer (email + push) with {len(suggestions)} suggestions")
 
 
 EVENT_HANDLERS = {

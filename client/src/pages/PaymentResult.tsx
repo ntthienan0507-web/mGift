@@ -11,44 +11,38 @@ import {
   Clock,
   ArrowRight,
 } from "lucide-react";
-import { useOrderStore } from "@/store/useOrderStore";
-import { useGiftBoxStore } from "@/store/useGiftBoxStore";
-import { useNavigate } from "react-router-dom";
-import { useEffect, useState } from "react";
-
-const paymentMethodNames: Record<string, string> = {
-  vnpay: "VNPay",
-  momo: "Ví MoMo",
-  zalopay: "ZaloPay",
-  bank_transfer: "Chuyển khoản ngân hàng",
-  cod: "Thanh toán khi nhận hàng",
-};
+import { useOrder } from "@/hooks/useGifts";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { useState } from "react";
+import { SEO } from "@/components/SEO";
 
 export default function PaymentResult() {
-  const { currentOrder, clearOrder } = useOrderStore();
-  const { clearBox } = useGiftBoxStore();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const [copied, setCopied] = useState(false);
 
-  // Xóa Gift Box + lưu mã đơn hàng khi thanh toán thành công
-  useEffect(() => {
-    if (currentOrder?.status === "paid") {
-      clearBox();
-      // Lưu mã đơn hàng vào localStorage
-      try {
-        const key = "mgift_order_history";
-        const raw = localStorage.getItem(key);
-        const history: { id: string; date: string }[] = raw ? JSON.parse(raw) : [];
-        if (!history.some((o) => o.id === currentOrder.id)) {
-          history.unshift({ id: currentOrder.id, date: currentOrder.createdAt });
-          // Giữ tối đa 20 đơn gần nhất
-          localStorage.setItem(key, JSON.stringify(history.slice(0, 20)));
-        }
-      } catch { /* ignore */ }
-    }
-  }, [currentOrder?.status, currentOrder?.id, currentOrder?.createdAt, clearBox]);
+  const status = searchParams.get("status") || "failed";
+  const orderId = searchParams.get("order_id") || sessionStorage.getItem("mgift_current_order_id") || "";
+  const { data: order } = useOrder(orderId);
 
-  if (!currentOrder) {
+  const isSuccess = status === "success";
+
+  const handleCopyOrderId = () => {
+    navigator.clipboard.writeText(orderId);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleBackHome = () => {
+    sessionStorage.removeItem("mgift_current_order_id");
+    navigate("/");
+  };
+
+  const handleTrackOrder = () => {
+    navigate("/tracking?id=" + orderId);
+  };
+
+  if (!orderId) {
     return (
       <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
         <Gift className="h-16 w-16 text-muted-foreground/50" />
@@ -58,25 +52,10 @@ export default function PaymentResult() {
     );
   }
 
-  const isSuccess = currentOrder.status === "paid";
-
-  const handleCopyOrderId = () => {
-    navigator.clipboard.writeText(currentOrder.id);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleBackHome = () => {
-    clearOrder();
-    navigate("/");
-  };
-
-  const handleTrackOrder = () => {
-    navigate("/tracking");
-  };
-
   return (
     <div className="mx-auto max-w-2xl space-y-6 py-8">
+      <SEO title="Kết quả thanh toán" path="/payment/result" />
+
       {/* Status Header */}
       <div className="flex flex-col items-center text-center space-y-4">
         {isSuccess ? (
@@ -106,16 +85,15 @@ export default function PaymentResult() {
         )}
       </div>
 
-      {isSuccess && (
+      {isSuccess && order && (
         <>
-          {/* Thông tin đơn hàng */}
           <Card>
             <CardContent className="space-y-4 pt-6">
               {/* Mã đơn hàng */}
               <div className="flex items-center justify-between rounded-lg bg-muted p-4">
                 <div>
                   <p className="text-sm text-muted-foreground">Mã đơn hàng</p>
-                  <p className="text-lg font-bold">{currentOrder.id}</p>
+                  <p className="text-lg font-bold">{order.id}</p>
                 </div>
                 <Button
                   variant="outline"
@@ -137,17 +115,15 @@ export default function PaymentResult() {
                     <Clock className="h-3 w-3" /> Thời gian đặt
                   </p>
                   <p className="text-sm font-medium">
-                    {new Date(currentOrder.createdAt).toLocaleString("vi-VN")}
+                    {new Date(order.created_at).toLocaleString("vi-VN")}
                   </p>
                 </div>
                 <div className="space-y-1">
                   <p className="text-sm text-muted-foreground flex items-center gap-1">
-                    <Gift className="h-3 w-3" /> Phương thức
+                    <Gift className="h-3 w-3" /> Trạng thái
                   </p>
-                  <p className="text-sm font-medium">
-                    {currentOrder.paymentMethod
-                      ? paymentMethodNames[currentOrder.paymentMethod]
-                      : "—"}
+                  <p className="text-sm font-medium capitalize">
+                    {order.status}
                   </p>
                 </div>
                 <div className="space-y-1 sm:col-span-2">
@@ -155,14 +131,10 @@ export default function PaymentResult() {
                     <MapPin className="h-3 w-3" /> Giao đến
                   </p>
                   <p className="text-sm font-medium">
-                    {currentOrder.shipping.name} -{" "}
-                    {currentOrder.shipping.phone}
+                    {order.recipient_name} - {order.recipient_phone}
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    {currentOrder.shipping.email}
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    {currentOrder.shipping.address}
+                    {order.recipient_address}
                   </p>
                 </div>
               </div>
@@ -172,25 +144,20 @@ export default function PaymentResult() {
               {/* Danh sách sản phẩm */}
               <div className="space-y-3">
                 <p className="text-sm font-medium">
-                  Sản phẩm ({currentOrder.items.length} món)
+                  Sản phẩm ({order.items.length} món)
                 </p>
-                {currentOrder.items.map((item) => (
+                {order.items.map((item) => (
                   <div key={item.id} className="flex items-center gap-3">
-                    <img
-                      src={item.image}
-                      alt={item.name}
-                      className="h-12 w-12 rounded-lg object-cover"
-                    />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">
-                        {item.name}
+                        SP #{item.product_id.slice(0, 8)}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {item.supplierName}
+                        SL: {item.quantity}
                       </p>
                     </div>
                     <p className="text-sm font-medium">
-                      {item.price.toLocaleString("vi-VN")}đ
+                      {(item.unit_price * item.quantity).toLocaleString("vi-VN")}đ
                     </p>
                   </div>
                 ))}
@@ -203,30 +170,30 @@ export default function PaymentResult() {
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Tạm tính</span>
                   <span>
-                    {currentOrder.subtotal.toLocaleString("vi-VN")}đ
+                    {(order.total_amount - order.shipping_fee).toLocaleString("vi-VN")}đ
                   </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Phí giao hàng</span>
                   <span>
-                    {currentOrder.shippingFee.toLocaleString("vi-VN")}đ
+                    {order.shipping_fee.toLocaleString("vi-VN")}đ
                   </span>
                 </div>
               </div>
               <div className="flex justify-between text-lg font-bold">
                 <span>Tổng cộng</span>
                 <span className="text-primary">
-                  {currentOrder.total.toLocaleString("vi-VN")}đ
+                  {order.total_amount.toLocaleString("vi-VN")}đ
                 </span>
               </div>
 
-              {currentOrder.shipping.giftMessage && (
+              {order.gift_message && (
                 <div className="rounded-lg bg-primary/5 p-3">
                   <p className="text-xs text-muted-foreground mb-1">
                     Lời nhắn tặng quà
                   </p>
                   <p className="text-sm italic">
-                    "{currentOrder.shipping.giftMessage}"
+                    "{order.gift_message}"
                   </p>
                 </div>
               )}
@@ -242,7 +209,9 @@ export default function PaymentResult() {
               <div className="flex-1">
                 <p className="font-medium">Dự kiến giao hàng</p>
                 <p className="text-sm text-muted-foreground">
-                  2-4 ngày làm việc (gom hàng từ nhiều NCC)
+                  {order.estimated_delivery
+                    ? new Date(order.estimated_delivery).toLocaleDateString("vi-VN")
+                    : "2-4 ngày làm việc (gom hàng từ nhiều NCC)"}
                 </p>
               </div>
               <Badge variant="secondary">Đang xử lý</Badge>

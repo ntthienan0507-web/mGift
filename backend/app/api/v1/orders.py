@@ -17,9 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.deps import get_current_user
+from app.core.deps import get_admin_user, get_current_supplier, get_current_user
+from app.models.address import Address
 from app.models.order import Order, OrderItem, OrderItemStatus, OrderStatus
 from app.models.product import Product
+from app.models.shop import Shop
 from app.models.user import User
 from app.schemas.order import (
     CancelOrderRequest,
@@ -40,13 +42,56 @@ _ws_connections: dict[str, list[WebSocket]] = {}
 # 1. CUSTOMER: Create order
 # ═══════════════════════════════════════════════════
 
-@router.post("/", response_model=OrderResponse, status_code=201)
+@router.post(
+    "/",
+    response_model=OrderResponse,
+    status_code=201,
+    summary="Tạo đơn hàng",
+    description="Tạo đơn hàng mới, chia theo nhà cung cấp. Tự động tính phí ship, gói quà và gửi thông báo.",
+    responses={
+        400: {"description": "Đơn hàng trống, hết hàng hoặc thiếu thông tin người nhận"},
+        404: {"description": "Không tìm thấy sản phẩm hoặc địa chỉ"},
+    },
+)
 async def create_order(
     data: OrderCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Create order → split by supplier → fire ORDER_CREATED → notify each supplier."""
+    if not data.items:
+        raise HTTPException(status_code=400, detail="Order must contain at least one item")
+
+    # Resolve recipient info from address_id or direct fields
+    recipient_name = data.recipient_name
+    recipient_phone = data.recipient_phone
+    recipient_address = data.recipient_address
+
+    if data.address_id:
+        addr_result = await db.execute(
+            select(Address).where(Address.id == data.address_id, Address.user_id == current_user.id)
+        )
+        address = addr_result.scalar_one_or_none()
+        if not address:
+            raise HTTPException(status_code=404, detail="Address not found")
+
+        recipient_name = address.recipient_name
+        recipient_phone = address.recipient_phone
+        # Concatenate address parts
+        parts = [address.address_line]
+        if address.ward:
+            parts.append(address.ward)
+        if address.district:
+            parts.append(address.district)
+        parts.append(address.city)
+        recipient_address = ", ".join(parts)
+    else:
+        if not recipient_name or not recipient_phone or not recipient_address:
+            raise HTTPException(
+                status_code=400,
+                detail="Either address_id or (recipient_name, recipient_phone, recipient_address) must be provided",
+            )
+
     total = 0.0
     order_items = []
     deadline = datetime.now(timezone.utc) + timedelta(
@@ -63,6 +108,8 @@ async def create_order(
         if product.stock < item_data.quantity:
             raise HTTPException(status_code=400, detail=f"Product {product.name} out of stock")
 
+        product.stock -= item_data.quantity
+
         subtotal = float(product.price) * item_data.quantity
         total += subtotal
 
@@ -77,14 +124,31 @@ async def create_order(
             )
         )
 
+    # Calculate shipping fee: base + per unique supplier
+    unique_suppliers = {oi.supplier_id for oi in order_items}
+    shipping_fee = settings.SHIPPING_FEE_BASE + settings.SHIPPING_FEE_PER_SUPPLIER * len(unique_suppliers)
+    total += shipping_fee
+
+    # Gift wrapping fee
+    if data.gift_wrapping:
+        total += settings.GIFT_WRAPPING_FEE
+
+    # Estimated delivery: now + 3 days
+    estimated_delivery = datetime.now(timezone.utc) + timedelta(days=3)
+
     order = Order(
         user_id=current_user.id,
         status=OrderStatus.PENDING,
         total_amount=total,
-        recipient_name=data.recipient_name,
-        recipient_phone=data.recipient_phone,
-        recipient_address=data.recipient_address,
+        recipient_name=recipient_name,
+        recipient_phone=recipient_phone,
+        recipient_address=recipient_address,
         note=data.note,
+        gift_message=data.gift_message,
+        gift_card_template=data.gift_card_template,
+        gift_wrapping=data.gift_wrapping,
+        shipping_fee=shipping_fee,
+        estimated_delivery=estimated_delivery,
     )
     db.add(order)
     await db.flush()
@@ -110,12 +174,22 @@ async def create_order(
 # 2. SUPPLIER: Accept or Reject items
 # ═══════════════════════════════════════════════════
 
-@router.post("/{order_id}/items/{item_id}/respond")
+@router.post(
+    "/{order_id}/items/{item_id}/respond",
+    summary="NCC phản hồi đơn hàng",
+    description="Nhà cung cấp chấp nhận hoặc từ chối một item trong đơn hàng.",
+    responses={
+        400: {"description": "Item đã được xử lý"},
+        403: {"description": "Không có quyền với item này"},
+        404: {"description": "Không tìm thấy order item"},
+    },
+)
 async def supplier_respond(
     order_id: uuid.UUID,
     item_id: uuid.UUID,
     data: SupplierRespondRequest,
     db: AsyncSession = Depends(get_db),
+    current_supplier: Shop = Depends(get_current_supplier),
 ):
     """Supplier accepts or rejects an order item."""
     result = await db.execute(
@@ -124,6 +198,8 @@ async def supplier_respond(
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="Order item not found")
+    if item.supplier_id != current_supplier.id:
+        raise HTTPException(status_code=403, detail="You do not own this order item")
     if item.status != OrderItemStatus.REQUESTED:
         raise HTTPException(status_code=400, detail=f"Item already {item.status.value}")
 
@@ -158,7 +234,16 @@ async def supplier_respond(
 # 3. CUSTOMER: Replace rejected/timeout item
 # ═══════════════════════════════════════════════════
 
-@router.post("/{order_id}/items/{item_id}/replace", response_model=OrderResponse)
+@router.post(
+    "/{order_id}/items/{item_id}/replace",
+    response_model=OrderResponse,
+    summary="Thay thế sản phẩm bị từ chối",
+    description="Khách hàng thay thế item bị từ chối/timeout bằng sản phẩm khác. Tự động tính lại tổng tiền.",
+    responses={
+        400: {"description": "Đơn hàng không ở trạng thái chờ thay thế hoặc hết hàng"},
+        404: {"description": "Không tìm thấy đơn hàng, item hoặc sản phẩm mới"},
+    },
+)
 async def replace_item(
     order_id: uuid.UUID,
     item_id: uuid.UUID,
@@ -238,7 +323,16 @@ async def replace_item(
 # 4. CUSTOMER: Cancel order
 # ═══════════════════════════════════════════════════
 
-@router.post("/{order_id}/cancel", response_model=OrderResponse)
+@router.post(
+    "/{order_id}/cancel",
+    response_model=OrderResponse,
+    summary="Hủy đơn hàng",
+    description="Khách hàng hủy đơn hàng. Hoàn lại tồn kho và gửi email thông báo.",
+    responses={
+        400: {"description": "Không thể hủy đơn đang giao/đã giao/đã hủy"},
+        404: {"description": "Không tìm thấy đơn hàng"},
+    },
+)
 async def cancel_order(
     order_id: uuid.UUID,
     data: CancelOrderRequest,
@@ -260,10 +354,18 @@ async def cancel_order(
     order.status = OrderStatus.CANCELLED
     order.cancel_reason = data.reason
 
-    # Cancel all active items
+    # Cancel all active items and restore stock
     for item in order.items:
         if item.status not in (OrderItemStatus.REJECTED, OrderItemStatus.TIMEOUT, OrderItemStatus.REPLACED, OrderItemStatus.CANCELLED):
             item.status = OrderItemStatus.CANCELLED
+
+            # Restore product stock
+            product_result = await db.execute(
+                select(Product).where(Product.id == item.product_id)
+            )
+            product = product_result.scalar_one_or_none()
+            if product:
+                product.stock += item.quantity
 
     await db.commit()
     await db.refresh(order)
@@ -287,14 +389,20 @@ async def cancel_order(
 # 5. INTERNAL: Update item status (shipper/warehouse/admin)
 # ═══════════════════════════════════════════════════
 
-@router.patch("/{order_id}/items/{item_id}/status")
+@router.patch(
+    "/{order_id}/items/{item_id}/status",
+    summary="Cập nhật trạng thái item (Admin)",
+    description="Admin cập nhật trạng thái item theo quy trình fulfillment: pickup, warehouse, pack, ship, deliver.",
+    responses={404: {"description": "Không tìm thấy order item"}},
+)
 async def update_order_item_status(
     order_id: uuid.UUID,
     item_id: uuid.UUID,
     new_status: OrderItemStatus,
     db: AsyncSession = Depends(get_db),
+    admin_user: User = Depends(get_admin_user),
 ):
-    """Internal API: shipper/warehouse updates item status along the fulfillment flow."""
+    """Internal API: admin updates item status along the fulfillment flow."""
     result = await db.execute(
         select(OrderItem).where(OrderItem.id == item_id, OrderItem.order_id == order_id)
     )
@@ -323,10 +431,39 @@ async def update_order_item_status(
 
 
 # ═══════════════════════════════════════════════════
-# 6. READ endpoints
+# 6. Gift card templates
 # ═══════════════════════════════════════════════════
 
-@router.get("/", response_model=list[OrderResponse])
+GIFT_CARD_TEMPLATES = [
+    {"id": "birthday", "name": "Sinh nhật", "preview_url": f"{settings.APP_BASE_URL}/static/gift-cards/birthday.png"},
+    {"id": "love", "name": "Tình yêu", "preview_url": f"{settings.APP_BASE_URL}/static/gift-cards/love.png"},
+    {"id": "thanks", "name": "Cảm ơn", "preview_url": f"{settings.APP_BASE_URL}/static/gift-cards/thanks.png"},
+    {"id": "congrats", "name": "Chúc mừng", "preview_url": f"{settings.APP_BASE_URL}/static/gift-cards/congrats.png"},
+    {"id": "newyear", "name": "Năm mới", "preview_url": f"{settings.APP_BASE_URL}/static/gift-cards/newyear.png"},
+    {"id": "wedding", "name": "Đám cưới", "preview_url": f"{settings.APP_BASE_URL}/static/gift-cards/wedding.png"},
+]
+
+
+@router.get(
+    "/gift-templates",
+    summary="Danh sách mẫu thiệp quà tặng",
+    description="Trả về danh sách các mẫu thiệp quà tặng có sẵn (sinh nhật, tình yêu, cảm ơn, v.v.).",
+)
+async def get_gift_templates():
+    """Return list of available gift card templates."""
+    return GIFT_CARD_TEMPLATES
+
+
+# ═══════════════════════════════════════════════════
+# 7. READ endpoints
+# ═══════════════════════════════════════════════════
+
+@router.get(
+    "/",
+    response_model=list[OrderResponse],
+    summary="Danh sách đơn hàng",
+    description="Lấy tất cả đơn hàng của người dùng, sắp xếp mới nhất trước.",
+)
 async def list_orders(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -337,7 +474,13 @@ async def list_orders(
     return result.scalars().all()
 
 
-@router.get("/{order_id}", response_model=OrderResponse)
+@router.get(
+    "/{order_id}",
+    response_model=OrderResponse,
+    summary="Chi tiết đơn hàng",
+    description="Lấy thông tin chi tiết một đơn hàng theo ID.",
+    responses={404: {"description": "Không tìm thấy đơn hàng"}},
+)
 async def get_order(
     order_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
@@ -353,7 +496,7 @@ async def get_order(
 
 
 # ═══════════════════════════════════════════════════
-# 7. WebSocket: Real-time tracking
+# 8. WebSocket: Real-time tracking
 # ═══════════════════════════════════════════════════
 
 @router.websocket("/ws/{order_id}")

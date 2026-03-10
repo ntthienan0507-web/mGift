@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -18,12 +18,14 @@ import {
   CheckCircle2,
   XCircle,
 } from "lucide-react";
-import { useOrderStore } from "@/store/useOrderStore";
-import type { PaymentMethod } from "@/store/useOrderStore";
+import { SEO } from "@/components/SEO";
+import { useOrder, useCreatePayment, usePaymentByOrder, useCancelOrder } from "@/hooks/useGifts";
 import { useNavigate } from "react-router-dom";
 
+type PaymentMethodId = "vnpay" | "momo" | "zalopay" | "bank_transfer" | "cod";
+
 const paymentMethods: {
-  id: PaymentMethod;
+  id: PaymentMethodId;
   name: string;
   desc: string;
   icon: React.ReactNode;
@@ -73,24 +75,56 @@ const paymentMethods: {
 type PaymentStep = "select" | "processing" | "waiting";
 
 export default function Payment() {
-  const { currentOrder, setPaymentMethod, setOrderStatus } = useOrderStore();
   const navigate = useNavigate();
-  const [selected, setSelected] = useState<PaymentMethod | null>(null);
+  const orderId = sessionStorage.getItem("mgift_current_order_id") || "";
+  const { data: order } = useOrder(orderId);
+  const createPayment = useCreatePayment();
+  const { data: payment } = usePaymentByOrder(orderId);
+  const cancelOrder = useCancelOrder();
+
+  const [selected, setSelected] = useState<PaymentMethodId | null>(null);
   const [step, setStep] = useState<PaymentStep>("select");
-  const [countdown, setCountdown] = useState(600); // 10 phút
+  const [countdown, setCountdown] = useState(600);
   const [copied, setCopied] = useState(false);
 
-  // Countdown timer cho trang chờ thanh toán
+  // Khi payment status thay đổi → redirect
+  useEffect(() => {
+    if (!payment) return;
+    if (payment.status === "completed" || payment.status === "paid") {
+      // Lưu order history vào localStorage
+      try {
+        const key = "mgift_order_history";
+        const raw = localStorage.getItem(key);
+        const history: { id: string; date: string }[] = raw ? JSON.parse(raw) : [];
+        if (!history.some((o) => o.id === orderId)) {
+          history.unshift({ id: orderId, date: new Date().toISOString() });
+          localStorage.setItem(key, JSON.stringify(history.slice(0, 20)));
+        }
+      } catch { /* ignore */ }
+      navigate("/payment/result?status=success&order_id=" + orderId);
+    } else if (payment.status === "failed" || payment.status === "expired") {
+      navigate("/payment/result?status=failed&order_id=" + orderId);
+    }
+  }, [payment?.status, orderId, navigate]);
+
+  // Redirect nếu payment đã có khi load (VNPay callback redirect)
+  useEffect(() => {
+    if (payment?.payment_url && step === "processing") {
+      // BE trả về payment_url → redirect đến cổng thanh toán
+      window.location.href = payment.payment_url;
+    }
+  }, [payment?.payment_url, step]);
+
+  // Countdown timer
   useEffect(() => {
     if (step !== "waiting") return;
     if (countdown <= 0) {
-      setOrderStatus("failed");
-      navigate("/payment/result");
+      navigate("/payment/result?status=failed&order_id=" + orderId);
       return;
     }
     const timer = setInterval(() => setCountdown((c) => c - 1), 1000);
     return () => clearInterval(timer);
-  }, [step, countdown, setOrderStatus, navigate]);
+  }, [step, countdown, navigate, orderId]);
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -98,32 +132,22 @@ export default function Payment() {
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   };
 
-  // Mô phỏng: sau 5-8s sẽ nhận được callback thanh toán thành công
-  const simulatePaymentCallback = useCallback(() => {
-    const delay = 5000 + Math.random() * 3000;
-    const timer = setTimeout(() => {
-      setOrderStatus("paid");
-      navigate("/payment/result");
-    }, delay);
-    return timer;
-  }, [setOrderStatus, navigate]);
-
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  if (!currentOrder) {
+  if (!orderId || (!order && !createPayment.isPending)) {
     return (
       <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
         <CreditCard className="h-16 w-16 text-muted-foreground/50" />
         <h2 className="text-xl font-semibold">Chưa có đơn hàng</h2>
         <p className="text-muted-foreground">
-          Hãy thêm sản phẩm vào Gift Box và đặt hàng trước.
+          Hãy thêm sản phẩm vào giỏ và đặt hàng trước.
         </p>
         <Button onClick={() => navigate("/checkout")}>
-          Quay lại Gift Box
+          Quay lại giỏ hàng
         </Button>
       </div>
     );
@@ -131,33 +155,55 @@ export default function Payment() {
 
   const handlePay = () => {
     if (!selected) return;
-    setPaymentMethod(selected);
 
-    // COD → xác nhận đơn luôn
+    // COD → tạo payment rồi chuyển luôn
     if (selected === "cod") {
-      setOrderStatus("paid");
-      navigate("/payment/result");
+      createPayment.mutate(
+        { order_id: orderId, method: "cod" },
+        {
+          onSuccess: () => {
+            // Lưu order history
+            try {
+              const key = "mgift_order_history";
+              const raw = localStorage.getItem(key);
+              const history: { id: string; date: string }[] = raw ? JSON.parse(raw) : [];
+              if (!history.some((o) => o.id === orderId)) {
+                history.unshift({ id: orderId, date: new Date().toISOString() });
+                localStorage.setItem(key, JSON.stringify(history.slice(0, 20)));
+              }
+            } catch { /* ignore */ }
+            navigate("/payment/result?status=success&order_id=" + orderId);
+          },
+        }
+      );
       return;
     }
 
-    // Các cổng khác → hiện bước xử lý rồi chờ
+    // Cổng khác → tạo payment rồi chờ
     setStep("processing");
-
-    setTimeout(() => {
-      setStep("waiting");
-      setCountdown(600);
-    }, 2000);
-  };
-
-  // Bấm "Tôi đã thanh toán" → mô phỏng check
-  const handleConfirmPaid = () => {
-    setStep("processing");
-    simulatePaymentCallback();
+    createPayment.mutate(
+      { order_id: orderId, method: selected },
+      {
+        onSuccess: (paymentData) => {
+          if (paymentData.payment_url) {
+            // BE trả redirect URL (VNPay, MoMo, ZaloPay)
+            window.location.href = paymentData.payment_url;
+          } else {
+            // Không có redirect URL → hiện QR/thông tin CK
+            setStep("waiting");
+            setCountdown(600);
+          }
+        },
+        onError: () => {
+          setStep("select");
+        },
+      }
+    );
   };
 
   const handleCancel = () => {
-    setOrderStatus("failed");
-    navigate("/payment/result");
+    cancelOrder.mutate({ orderId });
+    navigate("/payment/result?status=failed&order_id=" + orderId);
   };
 
   // ============ BƯỚC: ĐANG KẾT NỐI CỔNG TT ============
@@ -180,11 +226,10 @@ export default function Payment() {
 
     return (
       <div className="mx-auto max-w-xl space-y-6 py-4">
-        {/* Header */}
         <div className="text-center space-y-2">
           <h1 className="text-2xl font-bold">Hoàn tất thanh toán</h1>
           <p className="text-sm text-muted-foreground">
-            Đơn hàng #{currentOrder.id}
+            Đơn hàng #{orderId}
           </p>
         </div>
 
@@ -201,7 +246,6 @@ export default function Payment() {
           </CardContent>
         </Card>
 
-        {/* QR Code / Thông tin thanh toán */}
         <Card>
           <CardContent className="space-y-4 pt-6">
             {isEwallet && (
@@ -213,7 +257,6 @@ export default function Payment() {
                       {selected === "momo" ? "MoMo" : selected === "zalopay" ? "ZaloPay" : "VNPay / App ngân hàng"}
                     </span>
                   </p>
-                  {/* Mock QR Code */}
                   <div className="mx-auto flex h-52 w-52 items-center justify-center rounded-2xl border-2 border-dashed border-primary/30 bg-white">
                     <div className="text-center">
                       <QrCode className="mx-auto h-24 w-24 text-primary" />
@@ -221,33 +264,20 @@ export default function Payment() {
                     </div>
                   </div>
                 </div>
-
                 <Separator />
-
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Số tiền</span>
                     <span className="font-bold text-primary">
-                      {currentOrder.total.toLocaleString("vi-VN")}đ
+                      {order?.total_amount.toLocaleString("vi-VN")}đ
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Nội dung CK</span>
                     <div className="flex items-center gap-1">
-                      <span className="font-mono font-medium">
-                        {currentOrder.id}
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0"
-                        onClick={() => handleCopy(currentOrder.id)}
-                      >
-                        {copied ? (
-                          <CheckCircle2 className="h-3 w-3 text-green-600" />
-                        ) : (
-                          <Copy className="h-3 w-3" />
-                        )}
+                      <span className="font-mono font-medium">{orderId}</span>
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => handleCopy(orderId)}>
+                        {copied ? <CheckCircle2 className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
                       </Button>
                     </div>
                   </div>
@@ -261,7 +291,6 @@ export default function Payment() {
                   <p className="text-sm text-muted-foreground mb-4">
                     Chuyển khoản theo thông tin bên dưới
                   </p>
-                  {/* Mock QR Code ngân hàng */}
                   <div className="mx-auto flex h-52 w-52 items-center justify-center rounded-2xl border-2 border-dashed border-primary/30 bg-white">
                     <div className="text-center">
                       <QrCode className="mx-auto h-24 w-24 text-primary" />
@@ -269,9 +298,7 @@ export default function Payment() {
                     </div>
                   </div>
                 </div>
-
                 <Separator />
-
                 <div className="space-y-3 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Ngân hàng</span>
@@ -280,20 +307,9 @@ export default function Payment() {
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Số tài khoản</span>
                     <div className="flex items-center gap-1">
-                      <span className="font-mono font-medium">
-                        1234 5678 9012
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0"
-                        onClick={() => handleCopy("123456789012")}
-                      >
-                        {copied ? (
-                          <CheckCircle2 className="h-3 w-3 text-green-600" />
-                        ) : (
-                          <Copy className="h-3 w-3" />
-                        )}
+                      <span className="font-mono font-medium">1234 5678 9012</span>
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => handleCopy("123456789012")}>
+                        {copied ? <CheckCircle2 className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
                       </Button>
                     </div>
                   </div>
@@ -304,26 +320,15 @@ export default function Payment() {
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Số tiền</span>
                     <span className="font-bold text-primary">
-                      {currentOrder.total.toLocaleString("vi-VN")}đ
+                      {order?.total_amount.toLocaleString("vi-VN")}đ
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Nội dung CK</span>
                     <div className="flex items-center gap-1">
-                      <span className="font-mono font-medium">
-                        {currentOrder.id}
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0"
-                        onClick={() => handleCopy(currentOrder.id)}
-                      >
-                        {copied ? (
-                          <CheckCircle2 className="h-3 w-3 text-green-600" />
-                        ) : (
-                          <Copy className="h-3 w-3" />
-                        )}
+                      <span className="font-mono font-medium">{orderId}</span>
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => handleCopy(orderId)}>
+                        {copied ? <CheckCircle2 className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
                       </Button>
                     </div>
                   </div>
@@ -333,12 +338,7 @@ export default function Payment() {
           </CardContent>
         </Card>
 
-        {/* Hành động */}
         <div className="space-y-3">
-          <Button className="w-full" size="lg" onClick={handleConfirmPaid}>
-            <CheckCircle2 className="mr-2 h-4 w-4" />
-            Tôi đã thanh toán
-          </Button>
           <Button
             variant="outline"
             className="w-full"
@@ -351,8 +351,6 @@ export default function Payment() {
 
         <p className="text-center text-xs text-muted-foreground">
           Hệ thống sẽ tự động xác nhận khi nhận được thanh toán.
-          <br />
-          Nếu đã thanh toán nhưng chưa được xác nhận, bấm "Tôi đã thanh toán" để kiểm tra.
         </p>
       </div>
     );
@@ -361,7 +359,7 @@ export default function Payment() {
   // ============ BƯỚC: CHỌN CỔNG THANH TOÁN ============
   return (
     <div className="space-y-6">
-      {/* Header */}
+      <SEO title="Thanh toán" path="/payment" />
       <div className="flex items-center gap-3">
         <Button
           variant="ghost"
@@ -374,7 +372,7 @@ export default function Payment() {
         <div>
           <h1 className="text-2xl font-bold">Thanh toán</h1>
           <p className="text-sm text-muted-foreground">
-            Đơn hàng #{currentOrder.id}
+            Đơn hàng #{orderId}
           </p>
         </div>
       </div>
@@ -398,7 +396,6 @@ export default function Payment() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* Chọn phương thức thanh toán */}
         <div className="space-y-4 lg:col-span-2">
           <h2 className="text-lg font-semibold">
             Chọn phương thức thanh toán
@@ -476,81 +473,80 @@ export default function Payment() {
             <CardTitle className="text-base">Tóm tắt đơn hàng</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-2">
-              {currentOrder.items.map((item) => (
-                <div key={item.id} className="flex items-center gap-3">
-                  <img
-                    src={item.image}
-                    alt={item.name}
-                    className="h-10 w-10 rounded-md object-cover"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{item.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {item.supplierName}
-                    </p>
-                  </div>
-                  <p className="text-sm font-medium">
-                    {item.price.toLocaleString("vi-VN")}đ
+            {order && (
+              <>
+                <div className="space-y-2">
+                  {order.items.map((item) => (
+                    <div key={item.id} className="flex items-center gap-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">
+                          SP #{item.product_id.slice(0, 8)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          SL: {item.quantity}
+                        </p>
+                      </div>
+                      <p className="text-sm font-medium">
+                        {(item.unit_price * item.quantity).toLocaleString("vi-VN")}đ
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                <Separator />
+
+                <div className="space-y-1 text-sm">
+                  <p className="font-medium">Giao đến</p>
+                  <p className="text-muted-foreground">
+                    {order.recipient_name} - {order.recipient_phone}
+                  </p>
+                  <p className="text-muted-foreground">
+                    {order.recipient_address}
                   </p>
                 </div>
-              ))}
-            </div>
 
-            <Separator />
+                <Separator />
 
-            <div className="space-y-1 text-sm">
-              <p className="font-medium">Giao đến</p>
-              <p className="text-muted-foreground">
-                {currentOrder.shipping.name} - {currentOrder.shipping.phone}
-              </p>
-              <p className="text-muted-foreground">
-                {currentOrder.shipping.email}
-              </p>
-              <p className="text-muted-foreground">
-                {currentOrder.shipping.address}
-              </p>
-            </div>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Tạm tính</span>
+                    <span>
+                      {(order.total_amount - order.shipping_fee).toLocaleString("vi-VN")}đ
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Phí đóng gói</span>
+                    <span className="text-primary">Miễn phí</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Phí giao hàng</span>
+                    <span>{order.shipping_fee.toLocaleString("vi-VN")}đ</span>
+                  </div>
+                </div>
 
-            <Separator />
+                <Separator />
 
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Tạm tính</span>
-                <span>
-                  {currentOrder.subtotal.toLocaleString("vi-VN")}đ
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Phí đóng gói</span>
-                <span className="text-primary">Miễn phí</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Phí giao hàng</span>
-                <span>
-                  {currentOrder.shippingFee.toLocaleString("vi-VN")}đ
-                </span>
-              </div>
-            </div>
-
-            <Separator />
-
-            <div className="flex justify-between text-lg font-bold">
-              <span>Tổng cộng</span>
-              <span className="text-primary">
-                {currentOrder.total.toLocaleString("vi-VN")}đ
-              </span>
-            </div>
+                <div className="flex justify-between text-lg font-bold">
+                  <span>Tổng cộng</span>
+                  <span className="text-primary">
+                    {order.total_amount.toLocaleString("vi-VN")}đ
+                  </span>
+                </div>
+              </>
+            )}
 
             <Button
               className="w-full"
               size="lg"
-              disabled={!selected}
+              disabled={!selected || createPayment.isPending}
               onClick={handlePay}
             >
+              {createPayment.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
               {selected === "cod"
                 ? "Xác nhận đặt hàng (COD)"
-                : `Thanh toán ${currentOrder.total.toLocaleString("vi-VN")}đ`}
+                : `Thanh toán ${order?.total_amount.toLocaleString("vi-VN") ?? ""}đ`}
             </Button>
           </CardContent>
         </Card>

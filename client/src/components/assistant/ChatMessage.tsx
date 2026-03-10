@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Bot, User } from "lucide-react";
 
@@ -14,12 +15,13 @@ export function ChatMessage({ content, role, isTyping }: ChatMessageProps) {
   useEffect(() => {
     if (role !== "assistant" || !content) return;
     let i = 0;
+    const chunk = 5;
     setDisplayed("");
     const interval = setInterval(() => {
-      i++;
+      i += chunk;
       setDisplayed(content.slice(0, i));
       if (i >= content.length) clearInterval(interval);
-    }, 15);
+    }, 10);
     return () => clearInterval(interval);
   }, [content, role]);
 
@@ -53,7 +55,18 @@ export function ChatMessage({ content, role, isTyping }: ChatMessageProps) {
             <span className="inline-block h-2 w-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:300ms]" />
           </div>
         ) : (
-          displayed
+          <ReactMarkdown
+            components={{
+              p: ({ children }) => <p className="mb-1 last:mb-0">{children}</p>,
+              strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+              em: ({ children }) => <em className="italic">{children}</em>,
+              ul: ({ children }) => <ul className="ml-4 list-disc space-y-0.5">{children}</ul>,
+              ol: ({ children }) => <ol className="ml-4 list-decimal space-y-0.5">{children}</ol>,
+              li: ({ children }) => <li>{children}</li>,
+            }}
+          >
+            {displayed}
+          </ReactMarkdown>
         )}
       </div>
     </div>

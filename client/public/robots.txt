@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /payment
+Disallow: /payment/result
+
+Sitemap: https://mgift-vn.netlify.app/sitemap.xml

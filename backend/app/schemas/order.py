@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.order import OrderItemStatus, OrderStatus
 
@@ -10,15 +10,26 @@ from app.models.order import OrderItemStatus, OrderStatus
 
 class OrderItemCreate(BaseModel):
     product_id: uuid.UUID
-    quantity: int = 1
+    quantity: int = Field(1, gt=0, description="Quantity must be greater than 0")
 
 
 class OrderCreate(BaseModel):
-    items: list[OrderItemCreate]
-    recipient_name: str
-    recipient_phone: str
-    recipient_address: str
+    items: list[OrderItemCreate] = Field(..., min_length=1, description="Order must have at least 1 item")
+    address_id: uuid.UUID | None = None
+    recipient_name: str | None = None
+    recipient_phone: str | None = None
+    recipient_address: str | None = None
     note: str | None = None
+    gift_message: str | None = None
+    gift_card_template: str | None = None
+    gift_wrapping: bool = False
+    shipping_speed: str = "standard"  # express | standard | economy
+
+    @field_validator("recipient_name")
+    @classmethod
+    def validate_recipient_fields(cls, v: str | None, info) -> str | None:
+        """Validation is done at the API level since we need DB access for address_id."""
+        return v
 
 
 # === Supplier respond ===
@@ -32,7 +43,7 @@ class SupplierRespondRequest(BaseModel):
 
 class ReplaceItemRequest(BaseModel):
     new_product_id: uuid.UUID
-    quantity: int = 1
+    quantity: int = Field(1, gt=0, description="Quantity must be greater than 0")
 
 
 # === Cancel ===
@@ -67,6 +78,12 @@ class OrderResponse(BaseModel):
     recipient_address: str
     note: str | None
     cancel_reason: str | None
+    gift_message: str | None
+    gift_card_template: str | None
+    gift_wrapping: bool
+    shipping_speed: str | None
+    shipping_fee: float
+    estimated_delivery: datetime | None
     items: list[OrderItemResponse]
     created_at: datetime
 

@@ -37,7 +37,20 @@ from app.services.notification import (
     notify_customer_order_cancelled,
     notify_supplier_new_order,
 )
+from app.services.push import (
+    push_new_order_to_supplier,
+    push_order_update,
+    push_to_admin,
+)
 from app.services.warehouse import check_all_at_warehouse, check_all_items_resolved
+
+
+async def _get_admin_fcm_tokens(db: AsyncSession) -> list[str]:
+    """Get FCM tokens of all admin users."""
+    result = await db.execute(
+        select(User).where(User.is_admin.is_(True), User.fcm_token.isnot(None))
+    )
+    return [u.fcm_token for u in result.scalars().all() if u.fcm_token]
 
 
 async def handle_order_created(event: dict) -> None:
@@ -87,6 +100,13 @@ async def handle_order_created(event: dict) -> None:
                 items=email_items,
             )
 
+            # Firebase push to supplier
+            await push_new_order_to_supplier(
+                fcm_token=shop.fcm_token,
+                order_id=order_id,
+                item_count=len(supplier_items),
+            )
+
             # Set timeout in Redis via supplier_handler
             await send_event("suppliers", {
                 "type": "SUPPLIER_NOTIFIED",
@@ -95,7 +115,16 @@ async def handle_order_created(event: dict) -> None:
                 "item_ids": [str(i.id) for i in supplier_items],
             })
 
-        logger.info(f"ORDER_CREATED {order_id}: notified {len(supplier_groups)} suppliers")
+        # Firebase push to all admins
+        admin_tokens = await _get_admin_fcm_tokens(db)
+        await push_to_admin(
+            fcm_tokens=admin_tokens,
+            title="Đơn hàng mới!",
+            body=f"Đơn #{order_id[:8]} - {len(items)} sản phẩm từ {len(supplier_groups)} NCC",
+            url=f"/admin/orders",
+        )
+
+        logger.info(f"ORDER_CREATED {order_id}: notified {len(supplier_groups)} suppliers + {len(admin_tokens)} admins")
 
 
 async def handle_supplier_responded(event: dict) -> None:
@@ -158,6 +187,13 @@ async def handle_all_confirmed(event: dict) -> None:
                 customer_name=user.full_name,
                 order_id=order_id,
             )
+            # Firebase push to customer
+            await push_order_update(
+                fcm_token=user.fcm_token,
+                order_id=order_id,
+                status="Đã xác nhận",
+                message="Tất cả NCC đã xác nhận! Đơn hàng đang được chuẩn bị giao.",
+            )
 
         # Update order to dispatching
         order_result = await db.execute(select(Order).where(Order.id == order_id))
@@ -167,15 +203,38 @@ async def handle_all_confirmed(event: dict) -> None:
             order.status = OrderStatus.DISPATCHING
             await db.commit()
 
-    logger.info(f"ALL_CONFIRMED {order_id}: notified customer, dispatching shipper")
+    logger.info(f"ALL_CONFIRMED {order_id}: notified customer (email + push), dispatching shipper")
+
+
+_STATUS_MESSAGES = {
+    "picked_up": "Shipper đã lấy hàng từ NCC",
+    "at_warehouse": "Hàng đã về kho mGift",
+    "shipping": "Đơn hàng đang giao đến bạn",
+    "delivered": "Đơn hàng đã giao thành công!",
+}
 
 
 async def handle_item_status_updated(event: dict) -> None:
-    """When shipper/warehouse updates an item → check if ready to pack."""
+    """When shipper/warehouse updates an item → push + check if ready to pack."""
     order_id = event["order_id"]
     status = event["status"]
 
     async with async_session() as db:
+        # Push status update to customer
+        if status in _STATUS_MESSAGES:
+            order_result = await db.execute(select(Order).where(Order.id == order_id))
+            order = order_result.scalar_one_or_none()
+            if order:
+                user_result = await db.execute(select(User).where(User.id == order.user_id))
+                user = user_result.scalar_one_or_none()
+                if user:
+                    await push_order_update(
+                        fcm_token=user.fcm_token,
+                        order_id=order_id,
+                        status=status,
+                        message=_STATUS_MESSAGES[status],
+                    )
+
         if status == OrderItemStatus.AT_WAREHOUSE.value:
             await check_all_at_warehouse(db, order_id)
 
@@ -195,8 +254,14 @@ async def handle_order_cancelled(event: dict) -> None:
                 customer_name=user.full_name,
                 order_id=order_id,
             )
+            await push_order_update(
+                fcm_token=user.fcm_token,
+                order_id=order_id,
+                status="Đã hủy",
+                message="Đơn hàng đã được hủy theo yêu cầu.",
+            )
 
-    logger.info(f"ORDER_CANCELLED {order_id}: apology email sent")
+    logger.info(f"ORDER_CANCELLED {order_id}: apology email + push sent")
 
 
 EVENT_HANDLERS = {

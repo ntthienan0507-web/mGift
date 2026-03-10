@@ -10,12 +10,14 @@ alembic==1.14.1
 pgvector==0.3.6
 
 # Pydantic
-pydantic==2.10.4
+pydantic[email]==2.10.4
 pydantic-settings==2.7.1
 
 # Auth
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+google-auth==2.38.0
 
 # Kafka
 aiokafka==0.12.0
@@ -29,9 +31,12 @@ google-generativeai==0.8.4
 httpx==0.28.1
 
 # AWS
-boto3==1.35.86
 aioboto3==13.4.0
+
+# Rate limiting
+slowapi==0.1.9
 
 # Utils
 loguru==0.7.3
 python-dotenv==1.0.1
+firebase-admin==6.6.0

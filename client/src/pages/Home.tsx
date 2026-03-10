@@ -1,8 +1,13 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Gift, MessageCircle, Package, Truck, ArrowRight } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Gift, MessageCircle, Package, Truck, ArrowRight, Sparkles } from "lucide-react";
+import { HeroIllustration } from "@/components/gifting/HeroIllustration";
 import { useNavigate } from "react-router-dom";
+import { useProducts } from "@/hooks/useGifts";
+import { resolveImageUrl } from "@/services/api";
+import { ProductCard } from "@/components/gifting/ProductCard";
+import { SEO } from "@/components/SEO";
 
 const features = [
   {
@@ -22,38 +27,38 @@ const features = [
   },
 ];
 
-const popularGifts = [
-  {
-    name: "Bộ quà trà hoa cao cấp",
-    price: "450,000đ",
-    image: "https://images.unsplash.com/photo-1563822249366-3efb23b8e0c9?w=400&h=400&fit=crop",
-    tag: "Tinh tế",
-  },
-  {
-    name: "Hộp chocolate Bỉ thủ công",
-    price: "520,000đ",
-    image: "https://images.unsplash.com/photo-1549007994-cb92caebd54b?w=400&h=400&fit=crop",
-    tag: "Best seller",
-  },
-  {
-    name: "Bó hoa hồng Ecuador",
-    price: "890,000đ",
-    image: "https://images.unsplash.com/photo-1487530811176-3780de880c2d?w=400&h=400&fit=crop",
-    tag: "Lãng mạn",
-  },
-  {
-    name: "Nước hoa mini gift set",
-    price: "750,000đ",
-    image: "https://images.unsplash.com/photo-1541643600914-78b084683601?w=400&h=400&fit=crop",
-    tag: "Sang trọng",
-  },
-];
-
 export default function Home() {
   const navigate = useNavigate();
+  const { data, isLoading } = useProducts({ limit: 8 });
+  const popularGifts = data;
+
+  const homeJsonLd = popularGifts?.length
+    ? {
+        "@context": "https://schema.org",
+        "@type": "ItemList",
+        name: "Quà tặng phổ biến trên mGift",
+        itemListElement: popularGifts.map((p, i) => ({
+          "@type": "ListItem",
+          position: i + 1,
+          item: {
+            "@type": "Product",
+            name: p.name,
+            description: p.description || p.name,
+            image: p.images[0]?.url ? resolveImageUrl(p.images[0].url) : undefined,
+            offers: {
+              "@type": "Offer",
+              price: p.price,
+              priceCurrency: "VND",
+              availability: "https://schema.org/InStock",
+            },
+          },
+        })),
+      }
+    : undefined;
 
   return (
     <div className="space-y-16 py-8">
+      <SEO path="/" jsonLd={homeJsonLd} />
       {/* Hero */}
       <section className="grid items-center gap-8 lg:grid-cols-2">
         <div className="space-y-6">
@@ -83,18 +88,7 @@ export default function Home() {
             </Button>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <img
-            src="https://images.unsplash.com/photo-1513885535751-8b9238bd345a?w=400&h=500&fit=crop"
-            alt="Hộp quà tặng"
-            className="h-64 w-full rounded-2xl object-cover shadow-lg"
-          />
-          <img
-            src="https://images.unsplash.com/photo-1549465220-1a8b9238f060?w=400&h=500&fit=crop"
-            alt="Quà tặng đẹp"
-            className="mt-8 h-64 w-full rounded-2xl object-cover shadow-lg"
-          />
-        </div>
+        <HeroIllustration />
       </section>
 
       {/* Popular Gifts */}
@@ -110,30 +104,30 @@ export default function Home() {
           </Button>
         </div>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          {popularGifts.map((gift) => (
-            <Card
-              key={gift.name}
-              className="group cursor-pointer overflow-hidden transition-shadow hover:shadow-lg"
-              onClick={() => navigate("/assistant")}
-            >
-              <div className="relative aspect-square overflow-hidden">
-                <img
-                  src={gift.image}
-                  alt={gift.name}
-                  className="h-full w-full object-cover transition-transform group-hover:scale-105"
+          {isLoading
+            ? Array.from({ length: 4 }).map((_, i) => (
+                <Card key={i} className="overflow-hidden">
+                  <Skeleton className="aspect-square w-full" />
+                  <CardContent className="p-3 space-y-2">
+                    <Skeleton className="h-4 w-3/4" />
+                    <Skeleton className="h-4 w-1/2" />
+                  </CardContent>
+                </Card>
+              ))
+            : popularGifts?.map((product) => (
+                <ProductCard
+                  key={product.id}
+                  product={{
+                    id: product.id,
+                    name: product.name,
+                    description: product.description,
+                    price: product.price,
+                    images: product.images.map((img) => resolveImageUrl(img.url)),
+                    supplierId: product.shop_id,
+                    supplierName: product.category_name || "mGift",
+                  }}
                 />
-                <Badge className="absolute left-2 top-2" variant="secondary">
-                  {gift.tag}
-                </Badge>
-              </div>
-              <CardContent className="p-3">
-                <p className="text-sm font-medium leading-tight">{gift.name}</p>
-                <p className="mt-1 text-sm font-bold text-primary">
-                  {gift.price}
-                </p>
-              </CardContent>
-            </Card>
-          ))}
+              ))}
         </div>
       </section>
 
@@ -152,19 +146,25 @@ export default function Home() {
         ))}
       </section>
 
-      {/* CTA with background image */}
-      <section className="relative overflow-hidden rounded-2xl">
-        <img
-          src="https://images.unsplash.com/photo-1607344645866-009c320b63e0?w=1200&h=400&fit=crop"
-          alt="Gift background"
-          className="absolute inset-0 h-full w-full object-cover"
-        />
-        <div className="relative bg-primary/85 p-8 text-center text-primary-foreground sm:p-12">
+      {/* CTA */}
+      <section className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-primary via-primary/90 to-primary/80">
+        {/* Decorative elements */}
+        <div className="absolute inset-0 overflow-hidden" aria-hidden="true">
+          <div className="absolute -top-20 -right-20 h-64 w-64 rounded-full bg-white/10 blur-2xl" />
+          <div className="absolute -bottom-16 -left-16 h-48 w-48 rounded-full bg-white/10 blur-2xl" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-[200px] opacity-[0.04] select-none">
+            🎁
+          </div>
+        </div>
+        <div className="relative p-8 text-center text-primary-foreground sm:p-12">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/15 backdrop-blur-sm">
+            <Sparkles className="h-7 w-7" />
+          </div>
           <h2 className="text-2xl font-bold sm:text-3xl">
             Sẵn sàng tặng quà ý nghĩa?
           </h2>
-          <p className="mt-2 text-primary-foreground/80">
-            Để AI của mGift giúp bạn tìm món quà hoàn hảo nhất.
+          <p className="mt-2 text-primary-foreground/80 max-w-md mx-auto">
+            Để AI của mGift giúp bạn tìm món quà hoàn hảo nhất cho người thân yêu.
           </p>
           <Button
             size="lg"
@@ -172,6 +172,7 @@ export default function Home() {
             className="mt-6"
             onClick={() => navigate("/assistant")}
           >
+            <MessageCircle className="mr-2 h-4 w-4" />
             Thử ngay
           </Button>
         </div>

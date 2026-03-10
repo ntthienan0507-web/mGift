@@ -5,90 +5,18 @@ import { Card } from "@/components/ui/card";
 import { ChatMessage } from "@/components/assistant/ChatMessage";
 import { QuickActions } from "@/components/assistant/QuickActions";
 import { ProductCard } from "@/components/gifting/ProductCard";
-import { GiftBoxSidebar } from "@/components/gifting/GiftBoxSidebar";
-import { Send, Bot } from "lucide-react";
+import { AuthModal } from "@/components/auth/AuthModal";
+import { useAIRecommend, useCart, type Product } from "@/hooks/useGifts";
+import { resolveImageUrl } from "@/services/api";
+import { Send, Bot, ShoppingCart } from "lucide-react";
+import { Link } from "react-router-dom";
+import { SEO } from "@/components/SEO";
 
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
 }
-
-// Mock products for demo
-const mockProducts = [
-  {
-    id: "1",
-    name: "Bộ quà trà hoa cao cấp",
-    price: 450000,
-    image: "https://images.unsplash.com/photo-1563822249366-3efb23b8e0c9?w=400&h=400&fit=crop",
-    supplierId: "s1",
-    supplierName: "The Tea House",
-    tags: ["Tinh tế"],
-  },
-  {
-    id: "2",
-    name: "Nến thơm lavender handmade",
-    price: 280000,
-    image: "https://images.unsplash.com/photo-1602607115284-ce640da56b96?w=400&h=400&fit=crop",
-    supplierId: "s2",
-    supplierName: "Candle Studio",
-    tags: ["Hot"],
-  },
-  {
-    id: "3",
-    name: "Hộp chocolate Bỉ thủ công",
-    price: 520000,
-    image: "https://images.unsplash.com/photo-1549007994-cb92caebd54b?w=400&h=400&fit=crop",
-    supplierId: "s3",
-    supplierName: "ChocoArt VN",
-    tags: ["Best seller"],
-  },
-  {
-    id: "4",
-    name: "Khăn lụa tơ tằm",
-    price: 680000,
-    image: "https://images.unsplash.com/photo-1606760227091-3dd870d97f1d?w=400&h=400&fit=crop",
-    supplierId: "s4",
-    supplierName: "Silk Saigon",
-    tags: ["Premium"],
-  },
-  {
-    id: "5",
-    name: "Bó hoa hồng Ecuador",
-    price: 890000,
-    image: "https://images.unsplash.com/photo-1487530811176-3780de880c2d?w=400&h=400&fit=crop",
-    supplierId: "s5",
-    supplierName: "Flora Boutique",
-    tags: ["Lãng mạn"],
-  },
-  {
-    id: "6",
-    name: "Nước hoa mini gift set",
-    price: 750000,
-    image: "https://images.unsplash.com/photo-1541643600914-78b084683601?w=400&h=400&fit=crop",
-    supplierId: "s6",
-    supplierName: "Perfume Lab",
-    tags: ["Sang trọng"],
-  },
-  {
-    id: "7",
-    name: "Gấu bông handmade",
-    price: 320000,
-    image: "https://images.unsplash.com/photo-1559715541-5daf8a0296d0?w=400&h=400&fit=crop",
-    supplierId: "s2",
-    supplierName: "Candle Studio",
-    tags: ["Dễ thương"],
-  },
-  {
-    id: "8",
-    name: "Bộ tách cà phê gốm sứ",
-    price: 420000,
-    image: "https://images.unsplash.com/photo-1514228742587-6b1558fcca3d?w=400&h=400&fit=crop",
-    supplierId: "s1",
-    supplierName: "The Tea House",
-    tags: ["Tinh tế"],
-  },
-];
 
 export default function Assistant() {
   const [messages, setMessages] = useState<Message[]>([
@@ -101,8 +29,13 @@ export default function Assistant() {
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [showProducts, setShowProducts] = useState(false);
+  const [aiProducts, setAiProducts] = useState<Product[]>([]);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const recommend = useAIRecommend();
+  const { data: cart } = useCart();
+
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -121,21 +54,63 @@ export default function Assistant() {
     setInput("");
     setIsLoading(true);
 
-    // Simulate AI response (replace with actual API call)
-    setTimeout(() => {
+    try {
+      const data = await recommend.mutateAsync(msg);
+
+      // Save suggested shipping speed for checkout
+      if (data.suggested_shipping_speed && data.suggested_shipping_speed !== "standard") {
+        sessionStorage.setItem("mgift_suggested_speed", data.suggested_shipping_speed);
+      }
+
+      // Build reply with shipping hint
+      let replyText = data.reply;
+      if (data.suggested_shipping_speed === "express") {
+        replyText += "\n\n⚡ *Mình nhận thấy bạn cần giao gấp — khi đặt hàng hãy chọn **Giao nhanh** để nhận sớm nhất nhé!*";
+      } else if (data.suggested_shipping_speed === "economy") {
+        replyText += "\n\n💰 *Không vội hả? Bạn có thể chọn **Giao tiết kiệm** khi đặt hàng để giảm phí ship nhé!*";
+      }
+
       const aiMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: `Tuyệt vời! Dựa trên yêu cầu "${msg}", tôi đã chọn ra những món quà phù hợp nhất. Bạn có thể thêm bất kỳ món nào vào Gift Box để tạo hộp quà riêng của mình!`,
+        content: replyText,
       };
       setMessages((prev) => [...prev, aiMsg]);
+      if (data.products?.length) {
+        setAiProducts(data.products);
+      }
+    } catch {
+      const errorMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content:
+          "Xin lỗi, tôi gặp sự cố khi xử lý yêu cầu của bạn. Vui lòng thử lại sau nhé!",
+      };
+      setMessages((prev) => [...prev, errorMsg]);
+    } finally {
       setIsLoading(false);
-      setShowProducts(true);
-    }, 1500);
+    }
   };
+
+  const mapProduct = (product: Product) => ({
+    id: product.id,
+    name: product.name,
+    description: product.description,
+    price: product.price,
+    images: product.images.map((img) => resolveImageUrl(img.url)),
+    supplierId: product.shop_id,
+    supplierName: product.category_name || "mGift",
+  });
+
+  const cartCount = cart?.total_items ?? 0;
 
   return (
     <div className="space-y-6">
+      <SEO
+        title="Tư vấn AI - Chọn quà thông minh"
+        description="Để AI của mGift giúp bạn tìm món quà hoàn hảo nhất. Phân tích sở thích người nhận và gợi ý quà tặng phù hợp."
+        path="/assistant"
+      />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -149,7 +124,16 @@ export default function Assistant() {
             </p>
           </div>
         </div>
-        <GiftBoxSidebar />
+        <Link to="/checkout" className="relative">
+          <Button variant="outline" size="sm">
+            <ShoppingCart className="h-5 w-5" />
+            {cartCount > 0 && (
+              <span className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
+                {cartCount}
+              </span>
+            )}
+          </Button>
+        </Link>
       </div>
 
       {/* Chat Area */}
@@ -197,16 +181,19 @@ export default function Assistant() {
       </Card>
 
       {/* Product Suggestions */}
-      {showProducts && (
+      {aiProducts.length > 0 && (
         <section className="space-y-4">
           <h2 className="text-lg font-semibold">Gợi ý cho bạn</h2>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            {mockProducts.map((p) => (
-              <ProductCard key={p.id} product={p} />
+            {aiProducts.map((p) => (
+              <ProductCard key={p.id} product={mapProduct(p)} />
             ))}
           </div>
         </section>
       )}
+
+      {/* Auth Modal */}
+      <AuthModal open={showAuthModal} onOpenChange={setShowAuthModal} />
     </div>
   );
 }

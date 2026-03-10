@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -45,8 +45,21 @@ class Order(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Gift fields
+    gift_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gift_card_template: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    gift_wrapping: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Shipping fields
+    shipping_speed: Mapped[str | None] = mapped_column(String(20), nullable=True, default="standard")
+    shipping_fee: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
+    estimated_delivery: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     user = relationship("User", back_populates="orders")
     items = relationship("OrderItem", back_populates="order", lazy="selectin")
+    payment = relationship("Payment", back_populates="order", uselist=False, lazy="selectin")
 
 
 class OrderItem(Base):

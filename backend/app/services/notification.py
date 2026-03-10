@@ -119,6 +119,80 @@ async def notify_customer_delivered(
     await _send_email(customer_email, f"[mGift] Đơn hàng #{order_id[:8]} đã giao!", html)
 
 
+async def send_password_reset_email(email: str, token: str) -> None:
+    """Send password reset email with a reset link containing the token."""
+    reset_url = f"{settings.APP_BASE_URL}/reset-password?token={token}"
+    html = f"""
+    <h2>mGift - Đặt lại mật khẩu</h2>
+    <p>Xin chào,</p>
+    <p>Chúng tôi nhận được yêu cầu đặt lại mật khẩu cho tài khoản của bạn.</p>
+    <p>Vui lòng nhấn vào liên kết bên dưới để đặt lại mật khẩu (có hiệu lực trong 15 phút):</p>
+    <p><a href="{reset_url}">Đặt lại mật khẩu</a></p>
+    <p>Nếu bạn không yêu cầu đặt lại mật khẩu, vui lòng bỏ qua email này.</p>
+    """
+    await _send_email(email, "[mGift] Đặt lại mật khẩu", html)
+
+
+async def notify_recipient_gift_coming(
+    recipient_name: str,
+    sender_name: str,
+    order_id: str,
+    gift_message: str | None = None,
+) -> None:
+    """Placeholder: Notify recipient that a gift is on its way.
+
+    Currently a no-op because recipient only has name/phone (no email).
+    Future: integrate SMS or push notification to inform the recipient.
+    """
+    logger.info(
+        f"Gift notification placeholder: {sender_name} → {recipient_name} "
+        f"(order #{order_id[:8]}), message: {gift_message or '(none)'}"
+    )
+
+
+async def send_supplier_recover_email(
+    email: str,
+    shop_name: str,
+    api_key: str,
+) -> None:
+    """Send API key recovery email to supplier."""
+    html = f"""
+    <h2>mGift - Khôi phục API Key</h2>
+    <p>Xin chào,</p>
+    <p>Bạn đã yêu cầu khôi phục API Key cho cửa hàng <b>{shop_name}</b>.</p>
+    <p>API Key của bạn:</p>
+    <div style="background:#f4f4f5;border-radius:8px;padding:16px;margin:16px 0;font-family:monospace;font-size:14px;word-break:break-all;">
+        {api_key}
+    </div>
+    <p>Đăng nhập tại: <a href="{settings.APP_BASE_URL}/supplier">{settings.APP_BASE_URL}/supplier</a></p>
+    <p>Nếu bạn không yêu cầu khôi phục này, vui lòng bỏ qua email này.</p>
+    """
+    await _send_email(email, f"[mGift] Khôi phục API Key - {shop_name}", html)
+
+
+async def send_supplier_welcome_email(
+    email: str,
+    shop_name: str,
+    api_key: str,
+) -> None:
+    """Send welcome email with API key credentials to new supplier."""
+    html = f"""
+    <h2>mGift - Chào mừng nhà cung cấp mới!</h2>
+    <p>Xin chào,</p>
+    <p>Cửa hàng <b>{shop_name}</b> đã được đăng ký thành công trên mGift.</p>
+    <p>Dưới đây là API Key để đăng nhập vào trang quản lý nhà cung cấp:</p>
+    <div style="background:#f4f4f5;border-radius:8px;padding:16px;margin:16px 0;font-family:monospace;font-size:14px;word-break:break-all;">
+        {api_key}
+    </div>
+    <p style="color:#dc2626;font-weight:bold;">
+        Hãy lưu API Key cẩn thận! Đây là thông tin xác thực duy nhất của shop bạn.
+    </p>
+    <p>Bạn có thể đăng nhập tại: <a href="{settings.APP_BASE_URL}/supplier">{settings.APP_BASE_URL}/supplier</a></p>
+    <p>Chúc bạn kinh doanh thành công trên mGift!</p>
+    """
+    await _send_email(email, f"[mGift] Chào mừng {shop_name} - Thông tin đăng nhập", html)
+
+
 async def _send_email(to: str, subject: str, html_body: str) -> None:
     """Send email via SMTP. Fails silently with logging."""
     if not settings.SMTP_HOST:
